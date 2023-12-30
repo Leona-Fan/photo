@@ -1,0 +1,8 @@
+<RCC>
+  <qresource prefix="icon">
+    <file>FaceDetect.svg</file>
+    <file>Style.svg</file>
+    <file>Camera.svg</file>
+    <file>Photo.svg</file>
+  </qresource>
+</RCC>
