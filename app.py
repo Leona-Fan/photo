@@ -76,7 +76,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         # 画面刷新周期为 30ms
         self.timer.start(30)
         # sampleCount = 5代表150ms 识别一次
-        self.sample_count = 5
+        self.sample_count = 2
         self.sample = 0
         # 加载Haar级联分类器
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -111,7 +111,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
 
     @pyqtSlot(str)
     def gestureProcess(self, gesture):
-        print(gesture)
+        print('当前的手势是：'+gesture)
 
     @pyqtSlot()
     def updateMainCamera(self):
