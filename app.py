@@ -16,12 +16,12 @@ import HandTrackingModule as htm
 import cv2
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QIcon, QImage, QPixmap, QKeySequence
-from PyQt5.QtWidgets import QApplication, QShortcut
+from PyQt5.QtWidgets import QApplication, QShortcut, QLabel
 from qfluentwidgets import InfoBar, InfoBarPosition, MSFluentTitleBar
 from qfluentwidgets.components.widgets.frameless_window import FramelessWindow
 import pickle
 
-from photo.common.constant import STYLE
+from common.constant import STYLE, SAMPLE_COUNT, REFRESH_PERIOD
 from resource.signal_bus import signalBus
 from ui.Ui_camMain import Ui_camMain
 import copy
@@ -47,12 +47,15 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         self.setTitleBar(MSFluentTitleBar(self))
         self.setWindowTitle('Face Gesture Detector')
         self.setWindowIcon(QIcon(':/icon/FaceDetect.svg'))
+        self.state = 1  # 1表示运行 0表示停止
         pixmap = QPixmap(':/icon/Photo.svg')
         self.styleLbl.setPixmap(pixmap)
         self.lastPhotoLbl.setPixmap(pixmap)
-        self.pic_dir = f'./pics/{random.choice(STYLE)}'
+        styleStr = random.choice(STYLE)
+        self.pic_dir = f'./pics/{styleStr}'
+        self.styleLblTitle.setText(styleStr)
         self.pic_file_list = [os.path.join(self.pic_dir, file_name) for file_name in os.listdir(self.pic_dir)]
-        pixmap = QPixmap(random.choice(self.pic_file_list)).scaled(200,200)
+        pixmap = QPixmap(random.choice(self.pic_file_list)).scaled(200, 200)
         self.styleLbl.setPixmap(pixmap)
         # init dir
         self.init_dir()
@@ -61,6 +64,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
 
         # init short-cut
         self.quitShortcut = QShortcut(QKeySequence("Q"), self)
+        self.startShortcut = QShortcut(QKeySequence("S"), self)
         # init signal button:
         self.connectSignalToSlot()
 
@@ -73,10 +77,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
     def init_resource(self):
         self.cap = cv2.VideoCapture(0)
         self.timer = QTimer(self)
-        # 画面刷新周期为 30ms
-        self.timer.start(30)
-        # sampleCount = 5代表150ms 识别一次
-        self.sample_count = 2
+        self.timer.start(REFRESH_PERIOD)
         self.sample = 0
         # 加载Haar级联分类器
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -97,6 +98,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         signalBus.gestureSignal.connect(self.gestureProcess)
         self.timer.timeout.connect(self.updateMainCamera)
         self.quitShortcut.activated.connect(self.quit)
+        self.startShortcut.activated.connect(self.restart)
 
     @pyqtSlot()
     def test(self):
@@ -104,20 +106,45 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
 
     @pyqtSlot()
     def quit(self):
+        if self.state == 0:
+            return
         self.timer.stop()
         self.releaseResoure()
         pixmap = QPixmap(':/icon/Camera.svg')
         self.cameraLbl.setPixmap(pixmap)
+        self.state = 0
 
-    @pyqtSlot(str)
-    def gestureProcess(self, gesture):
-        print('当前的手势是：'+gesture)
+    @pyqtSlot()
+    def restart(self):
+        if self.state == 1:
+            return
+        self.init_resource()
+        self.connectSignalToSlot()
+        self.state = 1
+
+    @pyqtSlot(str, QLabel)
+    def gestureProcess(self, gesture, referPhoto: QLabel):
+        if gesture == '1':
+            styleStr = random.choice(STYLE)
+            self.pic_dir = f'./pics/{styleStr}'
+            self.styleLblTitle.setText(styleStr)
+            self.pic_file_list = [os.path.join(self.pic_dir, file_name) for file_name in os.listdir(self.pic_dir)]
+            pixmap = QPixmap(random.choice(self.pic_file_list)).scaled(200, 200)
+            referPhoto.setPixmap(pixmap)
+        elif gesture == '2':
+            self.pic_file_list = [os.path.join(self.pic_dir, file_name) for file_name in os.listdir(self.pic_dir)]
+            pixmap = QPixmap(random.choice(self.pic_file_list)).scaled(200, 200)
+            referPhoto.setPixmap(pixmap)
+        print('当前的手势是：' + gesture)
 
     @pyqtSlot()
     def updateMainCamera(self):
         success, frame = self.cap.read()
+        if not success:
+            # 视频帧读取失败或帧为空，退出循环
+            return
         cv2.putText(frame, "Pose", (440, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
-        if self.sample == self.sample_count:
+        if self.sample == SAMPLE_COUNT:
             self.sample = 0
             H, W, _ = frame.shape
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -146,13 +173,17 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
                 predicted_character = self.labels_dict[int(prediction[0])]
                 # 相邻两张照片时间间隔至少为0.3秒
                 if predicted_character in ['0', '1', '2'] and len(faces) > 0:
-                    signalBus.gestureSignal.emit(predicted_character)
-                    for (x, y, w, h) in faces:
-                        cv2.imwrite(f'photos/photo_{self.photo_count}.jpg', frame)
-                        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                        self.photo_count += 1
-                        cv2.putText(frame, f"Photo Count: {self.photo_count}, pose: {predicted_character}", (10, 70),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    signalBus.gestureSignal.emit(predicted_character, self.styleLbl)
+                    if predicted_character == '0':
+                        for (x, y, w, h) in faces:
+                            cv2.imwrite(f'photos/photo_{self.photo_count}.jpg', frame)
+                            lastPhotoPixMap = QPixmap(f'photos/photo_{self.photo_count}.jpg').scaled(200, 200)
+                            self.lastPhotoLbl.setPixmap(lastPhotoPixMap)
+                            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                            self.photo_count += 1
+                            cv2.putText(frame, f"Photo Count: {self.photo_count}, pose: {predicted_character}",
+                                        (10, 70),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         # 显示到主界面
         self.sample += 1
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
