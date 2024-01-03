@@ -21,7 +21,7 @@ number_of_classes = 4
 
 # 设置每个类别样本数，前三类为size1，后三类为size2
 dataset_size1 = 100
-dataset_size2 = 500
+dataset_size2 = 100
 
 
 

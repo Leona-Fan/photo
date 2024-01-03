@@ -21,7 +21,7 @@ from qfluentwidgets import InfoBar, InfoBarPosition, MSFluentTitleBar
 from qfluentwidgets.components.widgets.frameless_window import FramelessWindow
 import pickle
 
-from common.constant import STYLE, SAMPLE_COUNT, REFRESH_PERIOD
+from common.constant import STYLE, SAMPLE_COUNT, REFRESH_PERIOD, PHOTO_CONT_TIME, PHOTO_COUNT
 from resource.signal_bus import signalBus
 from ui.Ui_camMain import Ui_camMain
 import copy
@@ -48,6 +48,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         self.setWindowTitle('Face Gesture Detector')
         self.setWindowIcon(QIcon(':/icon/FaceDetect.svg'))
         self.state = 1  # 1表示运行 0表示停止
+        self.takingPhoto = 0
         pixmap = QPixmap(':/icon/Photo.svg')
         self.styleLbl.setPixmap(pixmap)
         self.lastPhotoLbl.setPixmap(pixmap)
@@ -78,7 +79,9 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         self.cap = cv2.VideoCapture(0)
         self.timer = QTimer(self)
         self.timer.start(REFRESH_PERIOD)
-        self.sample = 0
+        self.timer_photo = QTimer(self)
+        self.detect_sample = 0
+        self.photo_sample = 0
         # 加载Haar级联分类器
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         # pTime = 0
@@ -97,6 +100,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         signalBus.testSignal.connect(self.test)
         signalBus.gestureSignal.connect(self.gestureProcess)
         self.timer.timeout.connect(self.updateMainCamera)
+        self.timer_photo.timeout.connect(self.updateTakingPhotoState)
         self.quitShortcut.activated.connect(self.quit)
         self.startShortcut.activated.connect(self.restart)
 
@@ -109,6 +113,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         if self.state == 0:
             return
         self.timer.stop()
+        self.timer_photo.stop()
         self.releaseResoure()
         pixmap = QPixmap(':/icon/Camera.svg')
         self.cameraLbl.setPixmap(pixmap)
@@ -138,14 +143,19 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
         print('当前的手势是：' + gesture)
 
     @pyqtSlot()
+    def updateTakingPhotoState(self):
+        self.takingPhoto = 0
+        self.timer_photo.stop()
+
+    @pyqtSlot()
     def updateMainCamera(self):
         success, frame = self.cap.read()
         if not success:
             # 视频帧读取失败或帧为空，退出循环
             return
         cv2.putText(frame, "Pose", (440, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
-        if self.sample == SAMPLE_COUNT:
-            self.sample = 0
+        if self.detect_sample == SAMPLE_COUNT:
+            self.detect_sample = 0
             H, W, _ = frame.shape
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.hands.process(frame_rgb)
@@ -156,6 +166,7 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
             x_ = []
             y_ = []
             pre_processed_landmark_list = None
+            predicted_character = ''
             if results.multi_hand_landmarks:
                 for hand_landmarks in results.multi_hand_landmarks:
                     for i in range(len(hand_landmarks.landmark)):
@@ -172,20 +183,28 @@ class XianyuFaceDetc(FramelessWindow, Ui_camMain):
                 prediction = self.model.predict([np.array(pre_processed_landmark_list)])
                 predicted_character = self.labels_dict[int(prediction[0])]
                 # 相邻两张照片时间间隔至少为0.3秒
-                if predicted_character in ['0', '1', '2'] and len(faces) > 0:
-                    signalBus.gestureSignal.emit(predicted_character, self.styleLbl)
-                    if predicted_character == '0':
-                        for (x, y, w, h) in faces:
-                            cv2.imwrite(f'photos/photo_{self.photo_count}.jpg', frame)
-                            lastPhotoPixMap = QPixmap(f'photos/photo_{self.photo_count}.jpg').scaled(200, 200)
-                            self.lastPhotoLbl.setPixmap(lastPhotoPixMap)
-                            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                            self.photo_count += 1
-                            cv2.putText(frame, f"Photo Count: {self.photo_count}, pose: {predicted_character}",
-                                        (10, 70),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            if self.takingPhoto == 0 and len(predicted_character) > 0 and predicted_character != 0 and len(faces) > 0:
+                print(predicted_character)
+                signalBus.gestureSignal.emit(predicted_character, self.styleLbl)
+            if predicted_character == '0' and len(faces) > 0:
+                # 开启十秒拍照
+                self.takingPhoto = 1
+                self.timer_photo.start(PHOTO_CONT_TIME)
+
+            if self.takingPhoto == 1 and len(faces) > 0 and self.photo_sample >= PHOTO_COUNT:
+                self.photo_sample = 0
+                for (x, y, w, h) in faces:
+                    cv2.imwrite(f'photos/photo_{self.photo_count}.jpg', frame)
+                    lastPhotoPixMap = QPixmap(f'photos/photo_{self.photo_count}.jpg').scaled(200, 200)
+                    self.lastPhotoLbl.setPixmap(lastPhotoPixMap)
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                    self.photo_count += 1
+                    cv2.putText(frame, f"Photo Count: {self.photo_count}, pose: {predicted_character}",
+                                (10, 70),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         # 显示到主界面
-        self.sample += 1
+        self.detect_sample += 1
+        self.photo_sample += 1
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = image.shape
         bytes_per_line = ch * w
